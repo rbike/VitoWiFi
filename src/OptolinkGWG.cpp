@@ -25,7 +25,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include "OptolinkGWG.hpp"
 
-OptolinkKW::OptolinkKW() :
+OptolinkGWG::OptolinkGWG() :
     _stream(nullptr),
     _state(INIT),
     _action(WAIT),
@@ -41,21 +41,22 @@ OptolinkKW::OptolinkKW() :
     _printer(nullptr) {}
 
 #ifdef ARDUINO_ARCH_ESP32
-void OptolinkKW::begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin) {
+void OptolinkGWG::begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin) {
   serial->begin(4800, SERIAL_8E2, rxPin, txPin);
   _stream = serial;
   // serial->flush();
 }
 #endif
 #ifdef ESP8266
-void OptolinkKW::begin(HardwareSerial* serial) {
+void OptolinkGWG::begin(HardwareSerial* serial) {
   serial->begin(4800, SERIAL_8E2);
   _stream = serial;
   // serial->flush();
 }
 #endif
 
-void OptolinkKW::loop() {
+
+void OptolinkGWG::loop() {
   switch (_state) {
     case INIT:
       _initHandler();
@@ -83,7 +84,7 @@ void OptolinkKW::loop() {
 }
 
 // reset new devices to KW state by sending 0x04.
-void OptolinkKW::_initHandler() {
+void OptolinkGWG::_initHandler() {
   if (_stream->available()) {
     if (_stream->peek() == 0x05) {
       _setState(IDLE);
@@ -101,7 +102,7 @@ void OptolinkKW::_initHandler() {
 }
 
 // idle state, waiting for sync from Vito
-void OptolinkKW::_idleHandler() {
+void OptolinkGWG::_idleHandler() {
   if (_stream->available()) {
     if (_stream->read() == 0x05) {
       _lastMillis = millis();
@@ -111,16 +112,18 @@ void OptolinkKW::_idleHandler() {
     } else {
       // received something unexpected
     }
+/* does not apply for GWG protocol
   } else if (_action == PROCESS && (millis() - _lastMillis < 10UL)) {  // don't wait for 0x05 sync signal, send directly after last request
     _setState(SEND);
     _sendHandler();
+*/
   } else if (millis() - _lastMillis > 5 * 1000UL) {
     _setState(INIT);
     _errorCode = 1;
   }
 }
 
-void OptolinkKW::_syncHandler() {
+void OptolinkGWG::_syncHandler() {
   const uint8_t buff[1] = {0x01};
   _stream->write(buff, sizeof(buff));
   _setState(SEND);
@@ -128,17 +131,39 @@ void OptolinkKW::_syncHandler() {
 }
 
 //
-void OptolinkKW::_sendHandler() {
+void OptolinkGWG::_sendHandler() {
   uint8_t buff[MAX_DP_LENGTH + 4];
+  _ttyp = (_address >> 8) & 0xFF;
   if (_writeMessageType) {
     // type is WRITE
     // has length of 4 chars + length of value
-    buff[0] = 0xF4;
-    buff[1] = (_address >> 8) & 0xFF;
-    buff[2] = _address & 0xFF;
-    buff[3] = _length;
+	// GWG select telegram type code
+	switch (_ttyp) {
+		case 0:            // Physical Write
+		  buff[0] = 0xC8;
+		  break;
+		case 1:            // Virtual Write
+		  buff[0] = 0xC4;
+		  break;
+		case 2:;           //EEPROM Write
+		  buff[0] = 0xAD;
+		  break;
+		case 3:            // XRAM Write
+		  buff[0] = 0x50;
+		  break;
+		case 4:            // Port Write
+		  buff[0] = 0x6D;
+		  break;
+		case 5:;           // BE Write
+		  buff[0] = 0x9d;
+		  break;
+	}
+    buff[1] = _address & 0xFF; // GWG has one byte address
+    buff[2] = _length;
+    buff[3] = 0x04;
     // add value to message
-    memcpy(&buff[4], _value, _length);
+    memcpy(&buff[3], _value, _length);
+    buff[(_length + 3)] = 0x04;          // GWG telegram end byte
     _rcvLen = 1;  // expected length is only ACK (0x00)
     _stream->write(buff, 4 + _length);
     if (_printer) {
@@ -149,10 +174,36 @@ void OptolinkKW::_sendHandler() {
   } else {
     // type is READ
     // has fixed length of 4 chars
-    buff[0] = 0xF7;
-    buff[1] = (_address >> 8) & 0xFF;
-    buff[2] = _address & 0xFF;
-    buff[3] = _length;
+	// GWG select telegram type code
+	switch (_ttyp) {
+		case 0:            // Physical Read
+		  buff[0] = 0xCB;
+		  break;
+		case 1:            // Virtual Read
+		  buff[0] = 0xC7;
+		  break;
+		case 2:;           //EEPROM Read
+		  buff[0] = 0xAE;
+		  break;
+		case 3:            // XRAM Read
+		  buff[0] = 0xC5;
+		  break;
+		case 4:            // Port Read
+		  buff[0] = 0x6E;
+		  break;
+		case 5:;           // BE Read
+		  buff[0] = 0x9E;
+		  break;
+		case 6:;           // KMBUS RAM Read
+		  buff[0] = 0x33;
+		  break;
+		case 7:;           // KMBUS EEPROM Read
+		  buff[0] = 0x43;
+		  break;
+	}
+    buff[1] = _address & 0xFF; // GWG has one byte address
+    buff[2] = _length;
+    buff[3] = 0x4;      // GWG telegram end byte
     _rcvLen = _length;  // expected answer length the same as sent
     _stream->write(buff, 4);
     if (_printer) {
@@ -166,7 +217,7 @@ void OptolinkKW::_sendHandler() {
   _setState(RECEIVE);
 }
 
-void OptolinkKW::_receiveHandler() {
+void OptolinkGWG::_receiveHandler() {
   while (_stream->available() > 0) {  // while instead of if: read complete RX buffer
     _rcvBuffer[_rcvBufferLen] = _stream->read();
     ++_rcvBufferLen;
@@ -194,16 +245,16 @@ void OptolinkKW::_receiveHandler() {
 }
 
 // set properties for datapoint and move state to SEND
-bool OptolinkKW::readFromDP(uint16_t address, uint8_t length) {
+bool OptolinkGWG::readFromDP(uint16_t address, uint8_t length) {
   return _transmit(address, length, false, nullptr);
 }
 
 // set properties datapoint and move state to SEND
-bool OptolinkKW::writeToDP(uint16_t address, uint8_t length, uint8_t value[]) {
+bool OptolinkGWG::writeToDP(uint16_t address, uint8_t length, uint8_t value[]) {
   return _transmit(address, length, true, value);
 }
 
-bool OptolinkKW::_transmit(uint16_t address, uint8_t length, bool write, uint8_t value[]) {
+bool OptolinkGWG::_transmit(uint16_t address, uint8_t length, bool write, uint8_t value[]) {
   if (_action != WAIT) {
     return false;
   }
@@ -219,7 +270,7 @@ bool OptolinkKW::_transmit(uint16_t address, uint8_t length, bool write, uint8_t
   return true;
 }
 
-const int8_t OptolinkKW::available() const {
+const int8_t OptolinkGWG::available() const {
   if (_action == RETURN_ERROR)
     return -1;
   else if (_action == RETURN)
@@ -228,7 +279,7 @@ const int8_t OptolinkKW::available() const {
     return 0;
 }
 
-const bool OptolinkKW::isBusy() const {
+const bool OptolinkGWG::isBusy() const {
   if (_action == WAIT)
     return false;
   else
@@ -236,7 +287,7 @@ const bool OptolinkKW::isBusy() const {
 }
 
 // return value and reset comunication to IDLE
-void OptolinkKW::read(uint8_t value[]) {
+void OptolinkGWG::read(uint8_t value[]) {
   if (_action != RETURN) {
     return;
   }
@@ -251,24 +302,24 @@ void OptolinkKW::read(uint8_t value[]) {
   }
 }
 
-const uint8_t OptolinkKW::readError() {
+const uint8_t OptolinkGWG::readError() {
   _setAction(WAIT);
   return _errorCode;
 }
 
 // clear serial input buffer
-inline void OptolinkKW::_clearInputBuffer() {
+inline void OptolinkGWG::_clearInputBuffer() {
   while (_stream->available() > 0) {
     _stream->read();
   }
 }
 
-void OptolinkKW::setLogger(Print* printer) {
+void OptolinkGWG::setLogger(Print* printer) {
   _printer = printer;
 }
 
 // Copied from Arduino.cc forum --> (C) robtillaart
-inline void OptolinkKW::_printHex(Print* printer, uint8_t array[], uint8_t length) {
+inline void OptolinkGWG::_printHex(Print* printer, uint8_t array[], uint8_t length) {
   char tmp[length * 2 + 1];  // NOLINT
   byte first;
   uint8_t j = 0;

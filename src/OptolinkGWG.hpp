@@ -27,9 +27,9 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <Arduino.h>
 #include "Constants.hpp"
 
-class OptolinkKW {
+class OptolinkGWG {
  public:
-  OptolinkKW();
+  OptolinkGWG();
 #ifdef ARDUINO_ARCH_ESP32
   void begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin);
 #endif
